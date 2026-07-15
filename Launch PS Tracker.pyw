@@ -8,8 +8,14 @@ import tkinter as tk
 from tkinter import scrolledtext
 import subprocess, threading, os, sys, json
 import requests
+import urllib.parse
 from pathlib import Path
 from datetime import datetime, timedelta
+
+# ── Version & auto-update ────────────────────────────────────────────────────
+CURRENT_VERSION  = "1.1"
+UPDATE_BASE      = "https://raw.githubusercontent.com/Raiedwar/ps-tracker-cle3/main"
+UPDATE_FILES     = ["trailing_4weeks_sideline.py", "Launch PS Tracker.pyw"]
 
 # ── Paths (all relative to this script's directory) ────────────────────────
 BASE        = Path(__file__).parent
@@ -482,6 +488,7 @@ class App:
 
         self.write("Ready. Enter the week start date and click RUN.\n", "gray")
         root.after(1500, self._update_session_status)
+        threading.Thread(target=self._check_for_updates, daemon=True).start()
 
     def _update_session_status(self):
         """Check session validity every 10 s and update the status bar."""
@@ -564,6 +571,53 @@ class App:
             server.serve_forever()
         except OSError:
             pass  # port in use — extension path unavailable, other methods still work
+
+    def _check_for_updates(self):
+        """Background thread: check GitHub for a newer version.txt; offer update if found."""
+        import urllib.request
+        try:
+            with urllib.request.urlopen(f"{UPDATE_BASE}/version.txt", timeout=5) as r:
+                remote = r.read().decode().strip()
+        except Exception:
+            return  # no internet or GitHub down — silent
+        try:
+            from packaging.version import Version
+            newer = Version(remote) > Version(CURRENT_VERSION)
+        except Exception:
+            newer = remote != CURRENT_VERSION
+        if not newer:
+            return
+        # Ask on the main thread
+        self.root.after(0, lambda: self._offer_update(remote))
+
+    def _offer_update(self, remote_ver):
+        from tkinter import messagebox
+        ans = messagebox.askyesno(
+            "Update Available",
+            f"PS Tracker v{remote_ver} is available (you have v{CURRENT_VERSION}).\n\nDownload and apply now?"
+        )
+        if not ans:
+            return
+        self._apply_update()
+
+    def _apply_update(self):
+        import urllib.request, shutil
+        from tkinter import messagebox
+        self.write("Downloading update...", "gold")
+        try:
+            for fname in UPDATE_FILES:
+                url  = f"{UPDATE_BASE}/{urllib.parse.quote(fname)}"
+                dest = BASE / fname
+                tmp  = dest.with_suffix(".tmp")
+                with urllib.request.urlopen(url, timeout=15) as r:
+                    tmp.write_bytes(r.read())
+                shutil.move(str(tmp), str(dest))
+                self.write(f"  Updated: {fname}", "green")
+            self.write("Update complete. Restart PS Tracker to use the new version.", "green")
+            messagebox.showinfo("Update Complete",
+                "Files updated.\n\nClose and reopen PS Tracker to run the new version.")
+        except Exception as e:
+            self.write(f"Update failed: {e}", "red")
 
     def write(self, msg, tag="white"):
         self.log.configure(state="normal")
